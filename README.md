@@ -37,7 +37,7 @@ rm -r ~/.hermes/plugins/model-providers/neuralwatt
 ## What you get
 
 - **Models.** `/model` lists Neuralwatt's live catalog with real context windows. If the catalog is down, you still get `nw-large`, `nw-flash` and `nw-small`. Side tasks like compression use `nw-flash`.
-- **Reasoning effort.** Your Hermes reasoning setting is sent as `reasoning_effort`. The recipe never sends it. Without it, requests run at the model's default (often `max`). Turning reasoning off sends `none`. GLM 5.3 can't turn it off. It gets its lightest level instead.
+- **Reasoning effort.** Your Hermes reasoning setting is sent as `reasoning_effort`. With no setting, the main chat sends `medium` to models that reason by default and accept it, as Hermes does for custom endpoints. Some map it up, so GLM 5.3 runs at `high`. Other models keep their own default. Turning reasoning off sends `none`. GLM 5.3 can't turn it off. It gets its lightest level instead.
 - **Sessions.** Each Hermes session is sent as a conversation id. The Neuralwatt dashboard then shows one session per conversation.
 - **Cost per turn.** Energy-billed accounts get an energy estimate. It uses Neuralwatt's published average energy per request for that model and prompt size, at your $/kWh rate. Like Neuralwatt's own billing, it never goes above the token price. Turns covered by daily free energy or a plan's kWh allowance show as included. Token-billed accounts get an estimate from token prices. These are estimates. `/usage` has the exact spend.
 - **`/usage`.** Credits left, this month's spend and energy, daily free energy, plan or key limits, and 30-day energy and carbon.
