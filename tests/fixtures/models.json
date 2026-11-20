@@ -1648,6 +1648,64 @@
         "deprecated": false,
         "deprecated_message": null
       }
+    },
+    {
+      "id": "mammoth-1",
+      "object": "model",
+      "created": 0,
+      "owned_by": "neuralwatt",
+      "max_model_len": 32753,
+      "metadata": {
+        "display_name": "mammoth-1",
+        "description": "Baseten mammoth-1 decision model (27B): answers typed questions (yes/no, choice, score) about a text or JSON state with a probability per option, from one read per question and no generated tokens. 32K tokens per question, 64K per request. Served on POST /v1/systemone.",
+        "provider": "Baseten",
+        "huggingface_id": "baselabs/mammoth-1",
+        "pricing": {
+          "input_per_million": 0.18,
+          "output_per_million": 0.0,
+          "cached_input_per_million": 0.018,
+          "cached_output_per_million": null,
+          "currency": "USD",
+          "pricing_tbd": false,
+          "cached_input_is_default": true,
+          "service_tier": "standard",
+          "flex_discount_multiplier": null
+        },
+        "capabilities": {
+          "tools": false,
+          "json_mode": false,
+          "vision": false,
+          "audio_input": false,
+          "reasoning": false,
+          "reasoning_effort": false,
+          "streaming": false,
+          "system_role": false,
+          "developer_role": false,
+          "task": "decision",
+          "hosted_tools": false
+        },
+        "reasoning": null,
+        "limits": {
+          "max_context_length": 32753,
+          "max_output_tokens": 0,
+          "max_images": null,
+          "max_images_total": null,
+          "max_audio_seconds": null,
+          "max_audio_clips": null,
+          "max_audio_bytes": null
+        },
+        "deprecated": false,
+        "deprecated_message": null
+      },
+      "architecture": {
+        "modality": "text->decisions",
+        "input_modalities": [
+          "text"
+        ],
+        "output_modalities": [
+          "decisions"
+        ]
+      }
     }
   ]
 }

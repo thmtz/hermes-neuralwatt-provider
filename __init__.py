@@ -136,7 +136,8 @@ class NeuralwattProfile(ProviderProfile):
         catalog = self._catalog(base_url, api_key or "", timeout)
         if catalog is None:
             return None
-        return [model_id for model_id, item in catalog.items() if not (item.get("metadata") or {}).get("deprecated")]
+        return [model_id for model_id, item in catalog.items()
+                if not (item.get("metadata") or {}).get("deprecated") and _serves_chat(item)]
 
     def live_context_length(self, model: str, *, api_key: str = "", base_url: str = "") -> int | None:
         item = (self._catalog(base_url or None, api_key) or {}).get(model)
@@ -267,6 +268,14 @@ def _context_length(item: dict | None) -> int | None:
         if isinstance(value, int) and not isinstance(value, bool) and value > 0:
             return value
     return None
+
+
+def _serves_chat(item: dict) -> bool:
+    """Rows that set a task or don't output text can't chat. Decision and embedding models do both."""
+    if ((item.get("metadata") or {}).get("capabilities") or {}).get("task"):
+        return False
+    outputs = (item.get("architecture") or {}).get("output_modalities")
+    return not isinstance(outputs, list) or "text" in outputs
 
 
 def _reported_cost(cost: Any) -> float | None:

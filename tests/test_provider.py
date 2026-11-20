@@ -141,9 +141,29 @@ class ProviderTests(unittest.TestCase):
         catalog["data"][0]["metadata"]["deprecated"] = True
         self.responses[f"{BASE}/models"] = catalog
         models = nw.neuralwatt.fetch_models(api_key="sk-test")
-        self.assertEqual(len(models), len(catalog["data"]) - 1)
+        self.assertEqual(len(models), len(catalog["data"]) - 2)
         self.assertNotIn(catalog["data"][0]["id"], models)
+        self.assertNotIn("mammoth-1", models)
         self.assertIn("nw-large", models)
+
+    def test_fetch_models_skips_models_that_cant_chat(self):
+        catalog = fixture("models.json")
+        chat = next(m for m in catalog["data"] if m["id"] == "nw-small")
+        chat["architecture"] = {"output_modalities": ["text"]}
+        embedding = copy.deepcopy(chat)
+        embedding["id"] = "text-embedding"
+        embedding["metadata"]["capabilities"]["task"] = "embed"
+        no_text = copy.deepcopy(embedding)
+        no_text["id"] = "untasked-embedding"
+        del no_text["metadata"]["capabilities"]["task"]
+        no_text["architecture"] = {"output_modalities": ["embeddings"]}
+        catalog["data"] += [embedding, no_text]
+        self.responses[f"{BASE}/models"] = catalog
+        models = nw.neuralwatt.fetch_models()
+        for model_id in ("mammoth-1", "text-embedding", "untasked-embedding"):
+            self.assertNotIn(model_id, models)
+        self.assertIn("nw-small", models)
+        self.assertEqual(nw.neuralwatt.live_context_length("mammoth-1"), 32753)
 
     def test_fetch_models_failure_returns_none_and_backs_off(self):
         self.responses.pop(f"{BASE}/models")
@@ -187,7 +207,8 @@ class ProviderTests(unittest.TestCase):
 
     def test_every_model_accepts_the_unknown_model_fallback(self):
         for item in fixture("models.json")["data"]:
-            self.assertIn("low", item["metadata"]["reasoning"]["accepted_efforts"], item["id"])
+            if not item["metadata"]["capabilities"].get("task"):
+                self.assertIn("low", item["metadata"]["reasoning"]["accepted_efforts"], item["id"])
 
     def test_session_id_becomes_conversation_id(self):
         body = nw.neuralwatt.build_extra_body
