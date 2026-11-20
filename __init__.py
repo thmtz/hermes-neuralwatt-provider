@@ -194,10 +194,6 @@ class NeuralwattProfile(ProviderProfile):
 
         catalog = self._catalog() or {}
         item = catalog.get(model) or {}
-        if billing["plan_active"]:
-            return _included_cost(CostResult, "Drawn from your plan's kWh allowance.")
-        if billing["free_remaining_kwh"] > 0 and _free_energy_covers(model, item, billing["free_labels"]):
-            return _included_cost(CostResult, "Covered by today's free energy.")
         matrix = self._energy_matrix()
         row, multiplier = _matrix_row(model, catalog, matrix)
         wh = _wh_for_prompt(row, matrix, _prompt_tokens(usage))
@@ -205,7 +201,13 @@ class NeuralwattProfile(ProviderProfile):
         if wh is None or rate is None:
             return CostResult(amount_usd=None, status="unknown", source="none", label="n/a",
                               notes=("No published energy figure for this model and prompt size. /usage shows actual spend.",))
-        amount = Decimal(str(wh)) / 1000 * rate * multiplier
+        kwh = Decimal(str(wh)) / 1000 * multiplier
+        free = billing["free_remaining_kwh"] if _free_energy_covers(model, item, billing["free_labels"]) else 0.0
+        plan = billing["plan_remaining_kwh"] if billing["plan_active"] else 0.0
+        if free > 0 or plan > 0:
+            allowance = " and ".join(name for name, left in (("today's free energy", free), ("your plan's kWh allowance", plan)) if left > 0)
+            return _allowance_cost(CostResult, kwh, Decimal(str(free)) + Decimal(str(plan)), allowance)
+        amount = kwh * rate
         if row.get("lane") != "speed":
             ceiling = _token_cost((item.get("metadata") or {}).get("pricing") or {}, usage)
             if ceiling is not None:
@@ -321,21 +323,27 @@ def _billing_of(quota: Any) -> dict | None:
     if reset and reset <= datetime.now(timezone.utc):
         free_remaining = _number(free.get("kwh_included")) or 0.0
     plan_remaining = _number(subscription.get("kwh_remaining"))
-    if plan_remaining is None and _number(subscription.get("kwh_included")) is not None:
-        plan_remaining = _number(subscription.get("kwh_included")) - (_number(subscription.get("kwh_used")) or 0.0)
+    included, used = _number(subscription.get("kwh_included")), _number(subscription.get("kwh_used"))
+    if plan_remaining is None and included is not None and used is not None:
+        plan_remaining = included - used
     return {
         "method": method,
         "plan_active": subscription.get("status", "active") in ("active", "trialing", "canceling")
         and not subscription.get("in_overage") and (plan_remaining or 0) > 0,
+        "plan_remaining_kwh": plan_remaining or 0.0,
         "free_remaining_kwh": free_remaining,
         "free_labels": [str(label) for label in free.get("model_labels") or ()],
         "legacy_credits": (_number((quota.get("balance") or {}).get("legacy_credits_usd")) or 0) > 0,
     }
 
 
-def _included_cost(cost_result: Any, note: str) -> Any:
+def _allowance_cost(cost_result: Any, kwh: Decimal, remaining_kwh: Decimal, allowance: str) -> Any:
+    """Included only when the turn's estimated kWh fits in what's left. Past that, part of it may be billed."""
+    if kwh > remaining_kwh:
+        return cost_result(amount_usd=None, status="unknown", source="none", label="n/a",
+                           notes=(f"This turn may not fit in {allowance}. /usage shows actual spend.",))
     return cost_result(amount_usd=Decimal(0), status="included", source="none", label="included",
-                       fetched_at=datetime.now(timezone.utc), notes=(note,))
+                       fetched_at=datetime.now(timezone.utc), notes=(f"Estimated to fit in {allowance}.",))
 
 
 def _free_energy_covers(model: str, item: dict, labels: list[str]) -> bool:
@@ -352,7 +360,7 @@ def _matrix_row(model: str, catalog: dict, matrix: dict | None) -> tuple[dict, D
     pricing = (item.get("metadata") or {}).get("pricing") or {}
     multiplier = Decimal("1")
     if pricing.get("service_tier") == "flex" or model.endswith("-flex"):
-        multiplier = Decimal(str(_number(pricing.get("flex_discount_multiplier")) or 0.65))
+        multiplier = Decimal(str(_number(pricing.get("flex_discount_multiplier")) or 1))
         model = model.removesuffix("-flex")
     if model in rows:
         return rows[model], multiplier

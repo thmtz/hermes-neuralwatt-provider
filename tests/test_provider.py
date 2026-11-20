@@ -259,6 +259,58 @@ class ProviderTests(unittest.TestCase):
         self.assertEqual(cost.status, "included")
         self.assertIn("allowance", cost.notes[0])
 
+    def test_turn_past_the_free_energy_left_is_unknown(self):
+        self.set_quota(daily_free_energy__kwh_remaining=0.00001, daily_free_energy__reset_at="2999-01-01T00:00:00Z")
+        cost = nw.neuralwatt.get_usage_cost("glm-5.3-flash", Usage(input_tokens=1000, output_tokens=10))
+        self.assertEqual((cost.status, cost.amount_usd), ("unknown", None))
+        self.assertIn("free energy", cost.notes[0])
+
+    def test_turn_past_the_plan_allowance_left_is_unknown(self):
+        self.set_quota(subscription={"plan": "standard", "status": "active", "kwh_remaining": 0.00001, "in_overage": False})
+        cost = nw.neuralwatt.get_usage_cost("nw-small", Usage(input_tokens=1000, output_tokens=10))
+        self.assertEqual((cost.status, cost.amount_usd), ("unknown", None))
+        self.assertIn("allowance", cost.notes[0])
+
+    def test_turn_that_just_fits_the_free_energy_left_is_included(self):
+        matrix = fixture("energy-matrix.json")
+        next(r for r in matrix["models"] if r["id"] == "glm-5.3-flash")["buckets"][1]["wh_per_request"] = 0.03
+        self.responses[nw.ENERGY_MATRIX_URL] = matrix
+        self.set_quota(daily_free_energy__kwh_remaining=0.00003, daily_free_energy__reset_at="2999-01-01T00:00:00Z")
+        cost = nw.neuralwatt.get_usage_cost("glm-5.3-flash", Usage(input_tokens=1000, output_tokens=1000))
+        self.assertEqual((cost.status, cost.amount_usd), ("included", Decimal(0)))
+
+    def test_flex_turn_is_checked_at_the_flex_rate(self):
+        self.set_quota(daily_free_energy__kwh_remaining=0.00002, daily_free_energy__reset_at="2999-01-01T00:00:00Z")
+        usage = Usage(input_tokens=1000, output_tokens=1000)
+        self.assertEqual(nw.neuralwatt.get_usage_cost("glm-5.3-flash", usage).status, "unknown")
+        self.assertEqual(nw.neuralwatt.get_usage_cost("glm-5.3-flash-flex", usage).status, "included")
+        catalog = fixture("models.json")
+        next(m for m in catalog["data"] if m["id"] == "glm-5.3-flash-flex")["metadata"]["pricing"]["flex_discount_multiplier"] = None
+        self.responses[f"{BASE}/models"] = catalog
+        nw._catalogs = nw._Cache()
+        self.assertEqual(nw.neuralwatt.get_usage_cost("glm-5.3-flash-flex", usage).status, "unknown")
+
+    def test_allowance_check_ignores_the_token_price_cap(self):
+        self.set_quota(daily_free_energy__kwh_remaining=0.00002, daily_free_energy__reset_at="2999-01-01T00:00:00Z")
+        self.assertEqual(nw.neuralwatt.get_usage_cost("glm-5.3-flash", Usage(input_tokens=1000)).status, "unknown")
+
+    def test_free_energy_and_plan_together_cover_a_turn(self):
+        self.set_quota(daily_free_energy__kwh_remaining=0.00007, daily_free_energy__reset_at="2999-01-01T00:00:00Z",
+                       subscription={"plan": "standard", "status": "active", "kwh_remaining": 0.0001, "in_overage": False})
+        cost = nw.neuralwatt.get_usage_cost("glm-5.3-flash", Usage(input_tokens=20_000, output_tokens=1000))
+        self.assertEqual(cost.status, "included")
+        self.assertIn("free energy and your plan", cost.notes[0])
+
+    def test_allowance_without_matrix_is_unknown(self):
+        self.responses.pop(nw.ENERGY_MATRIX_URL)
+        cost = nw.neuralwatt.get_usage_cost("glm-5.3-flash", Usage(input_tokens=1000, output_tokens=10))
+        self.assertEqual(cost.status, "unknown")
+        self.assertIn("No published energy figure", cost.notes[0])
+
+    def test_plan_without_usage_figures_is_not_included(self):
+        self.set_quota(subscription={"plan": "standard", "status": "active", "kwh_included": 20.0, "kwh_used": None})
+        self.assertNotEqual(nw.neuralwatt.get_usage_cost("nw-small", Usage(input_tokens=1000)).status, "included")
+
     def test_plan_allowance_from_included_and_used(self):
         self.set_quota(subscription={"plan": "standard", "kwh_included": 20.0, "kwh_used": 13.9})
         self.assertEqual(nw.neuralwatt.get_usage_cost("nw-small", Usage(input_tokens=1000)).status, "included")
