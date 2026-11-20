@@ -110,11 +110,13 @@ class ProviderTests(unittest.TestCase):
             nw.ENERGY_MATRIX_URL: fixture("energy-matrix.json"),
         }
         self.calls = []
+        self.keys_sent = []
         self.secrets = {nw.KEY_ENV: "sk-test"}
 
         def fake_get(url, api_key="", timeout=0):
             self.calls.append(url)
-            return copy.deepcopy(self.responses.get(url))
+            self.keys_sent.append((url, api_key))
+            return copy.deepcopy(self.responses.get((url, api_key), self.responses.get(url)))
 
         for target, replacement in (("_get_json", fake_get), ("_secret", lambda name: self.secrets.get(name, ""))):
             patcher = mock.patch.object(nw, target, side_effect=replacement)
@@ -155,6 +157,41 @@ class ProviderTests(unittest.TestCase):
         self.responses["https://proxy.example/v1/models"] = fixture("models.json")
         self.assertIn("nw-small", nw.neuralwatt.fetch_models(base_url="https://proxy.example/v1/"))
         self.assertEqual(self.calls, ["https://proxy.example/v1/models"])
+
+    def test_catalog_cache_is_per_key(self):
+        public = fixture("models.json")
+        for key in ("sk-a", "sk-b"):
+            private = copy.deepcopy(public)
+            private["data"].append(dict(public["data"][0], id=f"private-{key[-1]}"))
+            self.responses[(f"{BASE}/models", key)] = private
+        self.secrets.clear()
+        self.assertNotIn("private-a", nw.neuralwatt.fetch_models())
+        models_a = nw.neuralwatt.fetch_models(api_key="sk-a")
+        models_b = nw.neuralwatt.fetch_models(api_key="sk-b")
+        self.assertIn("private-a", models_a)
+        self.assertNotIn("private-b", models_a)
+        self.assertIn("private-b", models_b)
+        self.assertNotIn("private-a", models_b)
+        self.assertEqual(self.calls.count(f"{BASE}/models"), 3)
+        self.secrets[nw.KEY_ENV] = "sk-b"
+        self.assertEqual(nw.neuralwatt.get_model_context_length("private-b"), 262128)
+        self.assertIsNone(nw.neuralwatt.get_model_context_length("private-a"))
+
+    def test_configured_key_stays_off_other_hosts(self):
+        relay = "https://relay.example/v1"
+        self.responses[(f"{relay}/models", "sk-relay")] = fixture("models.json")
+        nw.neuralwatt.fetch_models(api_key="sk-relay", base_url=relay)
+        nw.neuralwatt.build_api_kwargs_extras(reasoning_config={"enabled": False}, model="glm-5.3", base_url=relay)
+        self.assertIn((f"{relay}/models", ""), self.keys_sent)
+        self.assertNotIn((f"{relay}/models", "sk-test"), self.keys_sent)
+        self.assertIsNone(nw.neuralwatt.fetch_account_usage(base_url=relay))
+        self.assertNotIn((f"{relay}/quota", "sk-test"), self.keys_sent)
+
+    def test_catalog_failure_is_per_key(self):
+        self.responses[(f"{BASE}/models", "sk-a")] = fixture("models.json")
+        self.responses.pop(f"{BASE}/models")
+        self.assertIsNone(nw.neuralwatt.fetch_models(api_key="sk-b"))
+        self.assertIn("nw-small", nw.neuralwatt.fetch_models(api_key="sk-a"))
 
     def test_context_length(self):
         self.assertIsNone(nw.neuralwatt.get_model_context_length("nw-small"))
