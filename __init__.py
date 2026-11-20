@@ -146,6 +146,13 @@ class NeuralwattProfile(ProviderProfile):
         hit, catalog = _catalogs.get(_api_base())
         return _context_length((catalog or {}).get(model)) if hit else None
 
+    def default_reasoning_config(self, model: str | None = None) -> dict | None:
+        """``medium`` when the model reasons by default and accepts it, as on Hermes's custom endpoints. Otherwise ``None``."""
+        reasoning = ((self._model(model) or {}).get("metadata") or {}).get("reasoning") or {}
+        if reasoning.get("default_enabled") and "medium" in (reasoning.get("accepted_efforts") or ()):
+            return {"enabled": True, "effort": "medium"}
+        return None
+
     def build_api_kwargs_extras(self, *, reasoning_config: dict | None = None, **context: Any) -> tuple[dict[str, Any], dict[str, Any]]:
         if not isinstance(reasoning_config, dict):
             return {}, {}

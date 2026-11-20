@@ -173,6 +173,32 @@ class ProviderTests(unittest.TestCase):
                          ({}, {"reasoning_effort": "max"}))
         self.assertEqual(extras(reasoning_config={"enabled": True}, model="nw-small"), ({}, {}))
 
+    def test_unset_reasoning_defaults_to_medium(self):
+        default = nw.neuralwatt.default_reasoning_config
+        self.assertEqual(default("nw-large"), {"enabled": True, "effort": "medium"})
+        self.assertEqual(nw.neuralwatt.build_api_kwargs_extras(reasoning_config=default("nw-large"), model="nw-large"),
+                         ({}, {"reasoning_effort": "medium"}))
+        self.assertEqual(default("glm-5.3"), {"enabled": True, "effort": "medium"})
+        self.assertIsNone(default("gemma-4-31b"))
+        self.assertIsNone(default("no-such-model"))
+        self.assertIsNone(default(None))
+
+    def test_unset_reasoning_sends_nothing_without_a_reasoning_block(self):
+        catalog = fixture("models.json")
+        next(m for m in catalog["data"] if m["id"] == "nw-small")["metadata"]["reasoning"] = None
+        self.responses[f"{BASE}/models"] = catalog
+        self.assertIsNone(nw.neuralwatt.default_reasoning_config("nw-small"))
+
+    def test_unset_reasoning_needs_medium_to_be_accepted(self):
+        catalog = fixture("models.json")
+        next(m for m in catalog["data"] if m["id"] == "nw-large")["metadata"]["reasoning"]["accepted_efforts"] = ["low", "high"]
+        self.responses[f"{BASE}/models"] = catalog
+        self.assertIsNone(nw.neuralwatt.default_reasoning_config("nw-large"))
+
+    def test_unset_reasoning_without_catalog_sends_nothing(self):
+        self.responses.pop(f"{BASE}/models")
+        self.assertIsNone(nw.neuralwatt.default_reasoning_config("nw-large"))
+
     def test_reasoning_off(self):
         extras = nw.neuralwatt.build_api_kwargs_extras
         off = {"enabled": False}
