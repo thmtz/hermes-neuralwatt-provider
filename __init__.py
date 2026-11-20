@@ -61,7 +61,8 @@ def _get_json(url: str, api_key: str = "", timeout: float = HOT_PATH_TIMEOUT_S) 
         return None
 
 
-def _billing_key(base: str, api_key: str) -> str:
+def _cache_key(base: str, api_key: str) -> str:
+    """Per base and key, since /models lists a key's private models too. Keyless fetches hash the empty string."""
     return f"{base}|{hashlib.sha256(api_key.encode()).hexdigest()[:16]}"
 
 
@@ -115,16 +116,18 @@ _matrix = _Cache()
 class NeuralwattProfile(ProviderProfile):
     def _catalog(self, base_url: str | None = None, api_key: str = "", timeout: float = HOT_PATH_TIMEOUT_S) -> dict[str, dict] | None:
         base = _api_base(base_url)
-        hit, catalog = _catalogs.get(base)
+        api_key = api_key or (_secret(KEY_ENV) if base == _api_base() else "")
+        key = _cache_key(base, api_key)
+        hit, catalog = _catalogs.get(key)
         if hit:
             return catalog
-        payload = _get_json(f"{base}/models", api_key or _secret(KEY_ENV), timeout)
+        payload = _get_json(f"{base}/models", api_key, timeout)
         items = payload.get("data") if isinstance(payload, dict) else payload
         if not isinstance(items, list):
-            _catalogs.put_failure(base, RETRY_AFTER_FAILURE_S)
+            _catalogs.put_failure(key, RETRY_AFTER_FAILURE_S)
             return None
         catalog = {item["id"]: item for item in items if isinstance(item, dict) and isinstance(item.get("id"), str)}
-        _catalogs.put(base, catalog, CATALOG_TTL_S)
+        _catalogs.put(key, catalog, CATALOG_TTL_S)
         return catalog
 
     def _model(self, model: str | None, base_url: str | None = None) -> dict | None:
@@ -143,7 +146,7 @@ class NeuralwattProfile(ProviderProfile):
         return _context_length(item)
 
     def get_model_context_length(self, model: str) -> int | None:
-        hit, catalog = _catalogs.get(_api_base())
+        hit, catalog = _catalogs.get(_cache_key(_api_base(), _secret(KEY_ENV)))
         return _context_length((catalog or {}).get(model)) if hit else None
 
     def build_api_kwargs_extras(self, *, reasoning_config: dict | None = None, **context: Any) -> tuple[dict[str, Any], dict[str, Any]]:
@@ -167,7 +170,7 @@ class NeuralwattProfile(ProviderProfile):
         if not api_key:
             return None
         base = _api_base()
-        key = _billing_key(base, api_key)
+        key = _cache_key(base, api_key)
         hit, billing = _billing.get(key)
         if hit:
             return billing
@@ -240,17 +243,17 @@ class NeuralwattProfile(ProviderProfile):
     def fetch_account_usage(self, *, base_url: str | None = None, api_key: str | None = None) -> Any | None:
         from agent.account_usage import AccountUsageSnapshot, AccountUsageWindow
 
-        api_key = (api_key or _secret(KEY_ENV)).strip()
+        base = _api_base(base_url)
+        api_key = (api_key or (_secret(KEY_ENV) if base == _api_base() else "")).strip()
         if not api_key:
             return None
-        base = _api_base(base_url)
         now = datetime.now(timezone.utc)
         quota = _get_json(f"{base}/quota", api_key, timeout=4.0)
         if not isinstance(quota, dict):
             return AccountUsageSnapshot(provider=self.name, source="neuralwatt_quota_api", fetched_at=now,
                                         title="Neuralwatt account", unavailable_reason="Neuralwatt account API unavailable")
         if billing := _billing_of(quota):
-            _billing.put(_billing_key(base, api_key), billing, BILLING_TTL_S)
+            _billing.put(_cache_key(base, api_key), billing, BILLING_TTL_S)
         energy = _get_json(f"{base}/usage/energy", api_key, timeout=4.0)
         windows = [AccountUsageWindow(**window) for window in _quota_windows(quota)]
         details = _quota_details(quota) + _energy_details(energy)
